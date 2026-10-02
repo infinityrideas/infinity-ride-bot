@@ -1,3 +1,4 @@
+
 import os
 import asyncio
 from datetime import datetime, timezone
@@ -44,6 +45,8 @@ TEXTS = {
         "report_saved": "تم تسجيل البلاغ. الإدارة راح تراجعه.",
         "help_text": "قبل الوردية: استلام السيارة.\nبعد الوردية: تسليم السيارة.\nبلّغ فوراً عن أي ضرر أو مخالفة.",
         "lang_saved": "تم حفظ اللغة.",
+        "choose_car": "اختر السيارة:",
+        "no_cars": "ما في سيارات متاحة. تواصل مع الإدارة.",
     },
     "en": {
         "choose_lang": "Choose your language:",
@@ -65,6 +68,8 @@ TEXTS = {
         "report_saved": "Report saved. Management will review it.",
         "help_text": "Before shift: check in.\nAfter shift: check out.\nReport damage or fines immediately.",
         "lang_saved": "Language saved.",
+        "choose_car": "Choose the car:",
+        "no_cars": "No cars available. Contact management.",
     },
     "no": {
         "choose_lang": "Velg språk:",
@@ -86,6 +91,8 @@ TEXTS = {
         "report_saved": "Rapport lagret. Ledelsen vil se på den.",
         "help_text": "Før skift: sjekk inn.\nEtter skift: sjekk ut.\nMeld skade eller bot med en gang.",
         "lang_saved": "Språk lagret.",
+        "choose_car": "Velg bil:",
+        "no_cars": "Ingen biler tilgjengelig. Kontakt ledelsen.",
     },
     "ro": {
         "choose_lang": "Alege limba:",
@@ -107,6 +114,8 @@ TEXTS = {
         "report_saved": "Raportul a fost salvat.",
         "help_text": "Înainte de tură: preluare.\nDupă tură: predare.\nRaportează imediat orice daună sau amendă.",
         "lang_saved": "Limba a fost salvată.",
+        "choose_car": "Alege mașina:",
+        "no_cars": "Nu sunt mașini disponibile. Contactează administrația.",
     },
 }
 
@@ -128,6 +137,20 @@ def t(lang: str, key: str) -> str:
 def get_driver(telegram_id: int):
     res = db.table("drivers").select("*").eq("telegram_id", str(telegram_id)).limit(1).execute()
     return res.data[0] if res.data else None
+
+
+def car_label(car: dict) -> str:
+    for key in ("plate", "plate_number", "registration", "name"):
+        if car.get(key):
+            return str(car[key])
+    return str(car.get("id", "car"))[:8]
+
+
+def list_cars():
+    res = db.table("cars").select("*").execute()
+    cars = res.data or []
+    active = [c for c in cars if c.get("active") is not False]
+    return active or cars
 
 
 def lang_keyboard():
@@ -158,6 +181,15 @@ def menu_keyboard(lang: str):
             ],
         ]
     )
+
+
+def cars_keyboard(cars):
+    rows = []
+    for car in cars:
+        rows.append(
+            [InlineKeyboardButton(car_label(car), callback_data=f"car:{car['id']}")]
+        )
+    return InlineKeyboardMarkup(rows)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -218,12 +250,36 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if open_shifts.data:
             await query.message.reply_text(t(lang, "already_open"))
             return
+        cars = list_cars()
+        if not cars:
+            await query.message.reply_text(t(lang, "no_cars"))
+            return
+        await query.message.reply_text(t(lang, "choose_car"), reply_markup=cars_keyboard(cars))
+        return
+
+    if data.startswith("car:"):
+        car_id = data.split(":", 1)[1]
+        open_shifts = (
+            db.table("shifts")
+            .select("*")
+            .eq("driver_id", driver["id"])
+            .eq("status", "open")
+            .execute()
+        )
+        if open_shifts.data:
+            await query.message.reply_text(t(lang, "already_open"))
+            return
+        cars = list_cars()
+        car = next((c for c in cars if str(c["id"]) == car_id), None)
+        if not car:
+            await query.message.reply_text(t(lang, "no_cars"))
+            return
         shift = (
             db.table("shifts")
             .insert(
                 {
                     "driver_id": driver["id"],
-                    "car_id": driver.get("car_id"),
+                    "car_id": car["id"],
                     "shift_type": driver.get("shift_type"),
                     "started_at": datetime.now(timezone.utc).isoformat(),
                     "status": "open",
@@ -240,7 +296,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "notes": "basic check-in",
             }
         ).execute()
-        await query.message.reply_text(t(lang, "checked_in"))
+        await query.message.reply_text(f"{t(lang, 'checked_in')} {car_label(car)}")
         return
 
     if data == "menu:checkout":
