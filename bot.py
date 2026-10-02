@@ -182,12 +182,12 @@ def earnings_text(driver, lang: str) -> str:
     month_pending = False
     share = float(driver.get("share_percent") or 50) / 100
     for row in rows:
-        raw_date = str(row.get("earned_on") or "")[:10]
+        raw_date = str(row.get("work_date") or row.get("earned_on") or "")[:10]
         try:
             earned = datetime.fromisoformat(raw_date).date()
         except ValueError:
             continue
-        amount = float(row.get("gross_nok") or 0)
+        amount = float(row.get("amount") or row.get("gross_nok") or 0)
         if earned == today:
             day += amount
         if earned >= week_start:
