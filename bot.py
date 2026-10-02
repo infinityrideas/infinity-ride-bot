@@ -1,7 +1,6 @@
-
 import os
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
 from supabase import create_client
@@ -169,6 +168,53 @@ def list_cars():
     return active or cars
 
 
+def money(value) -> str:
+    return f"{float(value or 0):,.0f} NOK"
+
+
+def earnings_text(driver, lang: str) -> str:
+    today = datetime.now(timezone.utc).date()
+    week_start = today - timedelta(days=today.weekday())
+    month_start = today.replace(day=1)
+    res = db.table("earnings").select("*").eq("driver_id", driver["id"]).execute()
+    rows = res.data or []
+    day = week = month_gross = month_net = 0
+    month_pending = False
+    share = float(driver.get("share_percent") or 50) / 100
+    for row in rows:
+        raw_date = str(row.get("earned_on") or "")[:10]
+        try:
+            earned = datetime.fromisoformat(raw_date).date()
+        except ValueError:
+            continue
+        amount = float(row.get("gross_nok") or 0)
+        if earned == today:
+            day += amount
+        if earned >= week_start:
+            week += amount
+        if earned >= month_start:
+            month_gross += amount
+            if row.get("approved"):
+                month_net += amount * 0.88 * share
+            else:
+                month_pending = True
+    titles = {
+        "ar": ("اليوم", "هذا الأسبوع", "هذا الشهر قبل الموافقة", "حصتك بعد الضريبة 12%"),
+        "en": ("Today", "This week", "This month before approval", "Your share after 12% tax"),
+        "no": ("I dag", "Denne uken", "Denne måneden før godkjenning", "Din andel etter 12% skatt"),
+        "ro": ("Azi", "Săptămâna asta", "Luna asta înainte de aprobare", "Partea ta după taxa 12%"),
+    }
+    t1, t2, t3, t4 = titles.get(lang, titles["en"])
+    pending = {
+        "ar": "بانتظار موافقتك",
+        "en": "waiting for your approval",
+        "no": "venter på godkjenning",
+        "ro": "în așteptarea aprobării",
+    }.get(lang, "waiting for your approval")
+    net_line = pending if month_pending and month_net == 0 else money(month_net)
+    return f"{t1}: {money(day)}\n{t2}: {money(week)}\n{t3}: {money(month_gross)}\n{t4}: {net_line}"
+
+
 def lang_keyboard():
     return InlineKeyboardMarkup(
         [
@@ -247,7 +293,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "menu:earnings":
-        await query.message.reply_text(t(lang, "earnings_soon"))
+        try:
+            await query.message.reply_text(earnings_text(driver, lang))
+        except Exception:
+            await query.message.reply_text(t(lang, "earnings_soon"))
         return
 
     if data == "menu:report":
