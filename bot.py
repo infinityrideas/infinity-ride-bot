@@ -47,6 +47,10 @@ TEXTS = {
         "lang_saved": "تم حفظ اللغة.",
         "choose_car": "اختر السيارة:",
         "no_cars": "ما في سيارات متاحة. تواصل مع الإدارة.",
+        "photo_ask": "أرسل صور السيارة: من برا، من جوا، وأي ضرر. لما تخلص اكتب تم.",
+        "photo_saved": "تم حفظ الصورة. أرسل المزيد أو اكتب تم.",
+        "photo_done": "تم حفظ الصور.",
+        "photo_need": "أرسل صورة واحدة على الأقل، أو اكتب تم للمتابعة.",
     },
     "en": {
         "choose_lang": "Choose your language:",
@@ -70,6 +74,10 @@ TEXTS = {
         "lang_saved": "Language saved.",
         "choose_car": "Choose the car:",
         "no_cars": "No cars available. Contact management.",
+        "photo_ask": "Send car photos: outside, inside, and any damage. Type done when finished.",
+        "photo_saved": "Photo saved. Send more or type done.",
+        "photo_done": "Photos saved.",
+        "photo_need": "Send at least one photo, or type done to continue.",
     },
     "no": {
         "choose_lang": "Velg språk:",
@@ -93,6 +101,10 @@ TEXTS = {
         "lang_saved": "Språk lagret.",
         "choose_car": "Velg bil:",
         "no_cars": "Ingen biler tilgjengelig. Kontakt ledelsen.",
+        "photo_ask": "Send bilder av bilen: utvendig, innvendig, og eventuell skade. Skriv ferdig når du er klar.",
+        "photo_saved": "Bilde lagret. Send flere eller skriv ferdig.",
+        "photo_done": "Bilder lagret.",
+        "photo_need": "Send minst ett bilde, eller skriv ferdig.",
     },
     "ro": {
         "choose_lang": "Alege limba:",
@@ -116,6 +128,10 @@ TEXTS = {
         "lang_saved": "Limba a fost salvată.",
         "choose_car": "Alege mașina:",
         "no_cars": "Nu sunt mașini disponibile. Contactează administrația.",
+        "photo_ask": "Trimite poze: exterior, interior și orice daună. Scrie gata când ai terminat.",
+        "photo_saved": "Poză salvată. Trimite încă una sau scrie gata.",
+        "photo_done": "Pozele au fost salvate.",
+        "photo_need": "Trimite cel puțin o poză, sau scrie gata.",
     },
 }
 
@@ -297,6 +313,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
         ).execute()
         await query.message.reply_text(f"{t(lang, 'checked_in')} {car_label(car)}")
+        context.user_data["photo_shift_id"] = shift_id
+        context.user_data["photo_type"] = "checkin"
+        context.user_data["photo_count"] = 0
+        await query.message.reply_text(t(lang, "photo_ask"))
         return
 
     if data == "menu:checkout":
@@ -326,16 +346,47 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
         ).execute()
         await query.message.reply_text(t(lang, "checked_out"))
+        context.user_data["photo_shift_id"] = shift["id"]
+        context.user_data["photo_type"] = "checkout"
+        context.user_data["photo_count"] = 0
+        await query.message.reply_text(t(lang, "photo_ask"))
         return
+
+
+async def save_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    shift_id = context.user_data.get("photo_shift_id")
+    if not shift_id or not update.message.photo:
+        return
+    driver = get_driver(update.effective_user.id)
+    lang = driver.get("language", "en") if driver else "en"
+    file_id = update.message.photo[-1].file_id
+    count = context.user_data.get("photo_count", 0) + 1
+    context.user_data["photo_count"] = count
+    db.table("checklists").insert(
+        {
+            "shift_id": shift_id,
+            "type": context.user_data.get("photo_type", "checkin"),
+            "items": {"photo": True},
+            "notes": f"photo:{file_id}",
+        }
+    ).execute()
+    await update.message.reply_text(t(lang, "photo_saved"))
 
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (update.message.text or "").strip().lower()
+    driver = get_driver(update.effective_user.id)
+    lang = driver.get("language", "en") if driver else "en"
+    if context.user_data.get("photo_shift_id") and text in {"تم", "done", "ferdig", "gata"}:
+        context.user_data.pop("photo_shift_id", None)
+        context.user_data.pop("photo_type", None)
+        context.user_data.pop("photo_count", None)
+        await update.message.reply_text(t(lang, "photo_done"))
+        return
     if not context.user_data.get("awaiting_report"):
         return
-    driver = get_driver(update.effective_user.id)
     if not driver:
         return
-    lang = driver.get("language", "en")
     db.table("deductions").insert(
         {
             "driver_id": driver["id"],
@@ -361,6 +412,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("language", start))
     app.add_handler(CallbackQueryHandler(on_callback))
+    app.add_handler(MessageHandler(filters.PHOTO, save_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.run_polling()
 
